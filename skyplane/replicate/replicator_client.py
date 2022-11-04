@@ -260,8 +260,15 @@ class ReplicatorClient:
         public_ips = [self.bound_nodes[n].public_ip() for n in self.topology.gateway_nodes]
         private_ips = [self.bound_nodes[n].private_ip() for n in self.topology.gateway_nodes if n.region.split(":")[0] == "gcp"]
         authorize_ip_jobs = []
+        # sky camp: authorize all IPs
+        # authorize_ip_jobs.extend(
+        #     [partial(self.aws.add_ips_to_security_group, r.split(":")[1], public_ips) for r in set(aws_regions_to_provision)]
+        # )
         authorize_ip_jobs.extend(
-            [partial(self.aws.add_ips_to_security_group, r.split(":")[1], public_ips) for r in set(aws_regions_to_provision)]
+            [partial(self.aws.add_ips_to_security_group, r.split(":")[1], ["0.0.0.0/0"]) for r in set(aws_regions_to_provision)]
+        )
+        authorize_ip_jobs.extend(
+            [partial(self.gcp.add_ips_to_firewall, r.split(":")[1], ["0.0.0.0/0"]) for r in set(gcp_regions_to_provision)]
         )
         if gcp_regions_to_provision:
             authorize_ip_jobs.append(partial(self.gcp.authorize_gateways, public_ips + private_ips, rule_name=self.gcp_firewall_name))
@@ -320,7 +327,9 @@ class ReplicatorClient:
         private_ips = [i.private_ip() for n, i in self.bound_nodes.items() if n.region.split(":")[0] == "gcp"]
         private_ips += [i.private_ip() for i in self.temp_nodes if i.region_tag.split(":")[0] == "gcp"]
         aws_regions = [node.region for node in self.topology.gateway_nodes if node.region.startswith("aws:")]
-        aws_jobs = [partial(self.aws.remove_ips_from_security_group, r.split(":")[1], public_ips) for r in set(aws_regions)]
+        # sky camp: enable all IPs
+        # aws_jobs = [partial(self.aws.remove_ips_from_security_group, r.split(":")[1], public_ips) for r in set(aws_regions)]
+        aws_jobs = []
         gcp_regions = [node.region for node in self.topology.gateway_nodes if node.region.startswith("gcp:")]
         gcp_jobs = [partial(self.gcp.remove_gateway_rule, self.gcp_firewall_name)] if gcp_regions else []
         do_parallel(lambda fn: fn(), aws_jobs + gcp_jobs, desc="Removing firewall rules")

@@ -92,7 +92,7 @@ class SkyplaneConfig:
 
     @staticmethod
     def generate_machine_id() -> str:
-        return uuid.UUID(int=uuid.getnode()).hex
+        return uuid.uuid4().hex
 
     @classmethod
     def default_config(cls) -> "SkyplaneConfig":
