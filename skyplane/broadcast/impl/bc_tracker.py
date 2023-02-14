@@ -183,7 +183,7 @@ class BCTransferProgressTracker(TransferProgressTracker):
             except Exception as e:
                 UsageClient.log_exception("verify job", e, args, self.dataplane.src_region_tag, dst_region, session_start_timestamp_ms)
                 raise e
-
+#
             UsageClient.log_transfer(transfer_stats, args, self.dataplane.src_region_tag, dst_region, session_start_timestamp_ms)
 
             return transfer_stats

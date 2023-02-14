@@ -1034,11 +1034,11 @@ class BroadcastILPSolverPlanner(BroadcastPlanner):
             print(f"Remaining node length: {len(g.nodes)}, nodes: {g.nodes}")
 
         # banned nodes
-        # sampled = list(self.G.nodes)
-        # sampled.remove("aws:eu-south-2")
-        # sampled.remove("aws:eu-central-2")
-        # sampled.remove("aws:ca-central-1")
-        # g = g.subgraph(sampled).copy()
+        sampled = list(self.G.nodes)
+        sampled.remove("aws:eu-south-2")
+        sampled.remove("aws:eu-central-2")
+        sampled.remove("aws:ca-central-1")
+        g = g.subgraph(sampled).copy()
 
         cost = np.array([e[2] for e in g.edges(data="cost")])
         tp = np.array([e[2] for e in g.edges(data="throughput")])
@@ -1161,7 +1161,8 @@ class BroadcastILPSolverPlanner(BroadcastPlanner):
         solve_iterative: bool = False,
         solver_verbose: bool = False,
         save_lp_path: Optional[str] = None,
-        n_clusters: Optional[int] = 20
+        n_clusters: Optional[int] = 20, 
+        obj_store: bool = True
     ) -> BroadcastReplicationTopology:
 
         import cvxpy as cp
@@ -1230,10 +1231,10 @@ class BroadcastILPSolverPlanner(BroadcastPlanner):
 
         # banned nodes
         # NOTE: why do we do this? 
-        # sampled = list(self.G.nodes)
-        # sampled.remove("aws:eu-south-2")
-        # sampled.remove("aws:eu-central-2")
-        # g = g.subgraph(sampled).copy()
+        sampled = list(self.G.nodes)
+        sampled.remove("aws:eu-south-2")
+        sampled.remove("aws:eu-central-2")
+        g = g.subgraph(sampled).copy()
 
         cost = np.array([e[2] for e in g.edges(data="cost")])
         tp = np.array([e[2] for e in g.edges(data="throughput")])
@@ -1265,7 +1266,12 @@ class BroadcastILPSolverPlanner(BroadcastPlanner):
 
         # constraints on VM per region
         for i in range(num_nodes):
-            constraints.append(v[i] <= problem.instance_limit)
+            # hack: if object store, then upload dest should use max VMs 
+            if obj_store and nodes[i] in dest_v: 
+                print("Destination instance set to", problem.instance_limit)
+                constraints.append(v[i] == problem.instance_limit)
+            else: 
+                constraints.append(v[i] <= problem.instance_limit)
             constraints.append(v[i] >= 0)
 
         # constraints to enforce flow between source/dest nodes

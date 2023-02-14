@@ -156,7 +156,7 @@ class GatewayReceiver:
             # should_decrypt = self.e2ee_secretbox is not None and chunk_request.dst_region == self.region
             # should_decompress = chunk_header.is_compressed and chunk_request.dst_region == self.region
 
-            # wait for space
+            ## wait for space
             while self.chunk_store.remaining_bytes() < chunk_header.data_len * self.max_pending_chunks:
                 print(f"[receiver:{server_port}]: No remaining space with bytes {self.chunk_store.remaining_bytes()} data len {chunk_header.data_len} max pending {self.max_pending_chunks}, total space {init_space}")
                 time.sleep(0.1)
@@ -185,7 +185,7 @@ class GatewayReceiver:
                             )
                         )
                     to_write = bytes(to_write)
-
+t
                     # try to write data until successful  
                     while True: 
                         try:

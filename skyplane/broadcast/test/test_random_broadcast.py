@@ -98,7 +98,8 @@ def replicate_random(
             [],
         )
 
-        dp.provision(allow_firewall=False, spinner=True)
+        #dp.provision(allow_firewall=False, spinner=True)
+        dp.provision(spinner=True)
         tracker = dp.run_async()
 
         # monitor the transfer

@@ -17,7 +17,7 @@ def start_transfer(args):
     # dst_regions = ["ap-south-1", "ap-east-1", "ap-southeast-1", "ap-northeast-3", "ap-northeast-1"]
     # dst_regions = ["ap-south-1", "ap-east-1", "ap-southeast-2", "ap-northeast-3", "ap-northeast-1"]
 
-    # dst_regions = ["ap-southeast-2", "ap-south-1"]
+    #dst_regions = ["ap-southeast-2", "ap-south-1"]
     dst_regions = ["ap-southeast-2", "ap-south-1", "ap-northeast-3", "ap-northeast-2", "ap-northeast-1"]
     # dst_regions = ["us-west-1", "us-west-2"]
     # dst_regions = ["ap-east-1", "ap-northeast-1"]
@@ -41,12 +41,20 @@ def start_transfer(args):
     # create bucket if it doesn't exist
     for (region, bucket_path) in zip([src_region] + dst_regions, [source_file] + dest_files):
         bucket_name = bucket_path.split("/")[2]
-        bucket = S3Interface(bucket_name)
-        try:
-            print("Create bucket", region)
-            bucket.create_bucket(region)
-        except Exception as e:
-            print(e)
+        bucket = S3Interface(bucket_name, region)
+        if not bucket.bucket_exists():
+            try:
+                print("Create bucket", region)
+                bucket.create_bucket(region)
+                
+            except Exception as e:
+                raise e 
+        else: 
+            print("Bucket exists", bucket_name, region)
+            for obj in bucket.list_objects(""):
+                print("list", obj)
+                break
+
 
     print(source_file)
     print(dest_files)
@@ -99,7 +107,8 @@ def start_transfer(args):
             dest_files,
             recursive=True,
         )
-        dp.provision(allow_firewall=False, spinner=True)
+        #dp.provision(allow_firewall=False, spinner=True)
+        dp.provision(spinner=True)
         tracker = dp.run_async()
 
         # monitor the transfer

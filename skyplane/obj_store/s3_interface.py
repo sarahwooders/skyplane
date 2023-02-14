@@ -18,11 +18,12 @@ class S3Object(ObjectStoreObject):
 
 
 class S3Interface(ObjectStoreInterface):
-    def __init__(self, bucket_name: str):
+    def __init__(self, bucket_name: str, region: str = None):
         self.auth = compute.AWSAuthentication()
         self.requester_pays = False
         self.bucket_name = bucket_name
         self._cached_s3_clients = {}
+        self.region = region
 
     def path(self):
         return f"s3://{self.bucket_name}"
@@ -31,12 +32,16 @@ class S3Interface(ObjectStoreInterface):
     @property
     @lru_cache(maxsize=1)
     def aws_region(self):
+        if self.region is not None: 
+            return self.region
+
         s3_client = self.auth.get_boto3_client("s3")
         default_region = cloud_config.get_flag("aws_default_region")
         try:
             # None means us-east-1 for legacy reasons
             region = s3_client.get_bucket_location(Bucket=self.bucket_name).get("LocationConstraint", "us-east-1")
-            return region if region is not None else default_region
+            self.region = region if region is not None else default_region
+            return self.region
         except Exception as e:
             if "An error occurred (AccessDenied) when calling the GetBucketLocation operation" in str(e):
                 logger.warning(f"Bucket location {self.bucket_name} is not public. Assuming region is {default_region}")

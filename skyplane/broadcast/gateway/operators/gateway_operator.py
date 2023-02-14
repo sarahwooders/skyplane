@@ -139,12 +139,15 @@ class GatewayWaitReciever(GatewayOperator):
             return False
 
         # check to see if file is completed downloading
+        data_size = None
         with open(chunk_file_path, "rb") as f:
             data = f.read()
             if len(data) < chunk_req.chunk.chunk_length_bytes:
                 # download not complete
                 return False
-        print(f"[{self.handle}:{self.worker_id}] Successfully recieved chunk {chunk_req.chunk.chunk_id}")
+            data_size = len(data)
+        print(f"[{self.handle}:{self.worker_id}] Successfully recieved chunk {chunk_req.chunk.chunk_id}, size {data_size} {chunk_req.chunk.chunk_length_bytes}")
+        assert data_size == chunk_req.chunk.chunk_length_bytes
         return True
 
 
@@ -278,7 +281,7 @@ class GatewaySender(GatewayOperator):
             #       break
             #   except Exception as e:
             #       print("sender post error", e)
-            #       time.sleep(1)
+            #       time.sleep(5)
 
             response = self.http_pool.request(
                 "POST", f"https://{dst_host}:8080/api/v1/chunk_requests", body=register_body, headers={"Content-Type": "application/json"}
@@ -306,6 +309,8 @@ class GatewaySender(GatewayOperator):
             # read data from disk (and optionally compress if sending from source region)
             with open(chunk_file_path, "rb") as f:
                 data = f.read()
+
+            # TODO: if this assert fails, do a re-try like with recieve
             assert len(data) == chunk.chunk_length_bytes, f"chunk {chunk_id} has size {len(data)} but should be {chunk.chunk_length_bytes}"
 
             wire_length = len(data)
