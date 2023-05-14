@@ -96,10 +96,15 @@ class S3Interface(ObjectStoreInterface):
         # delete bucket
         self._s3_client().delete_bucket(Bucket=self.bucket_name)
 
-    def list_objects(self, prefix="", region=None) -> Iterator[S3Object]:
+
+ 
+    def list_objects(self, prefix="", max_items=None, region=None) -> Iterator[S3Object]:
         paginator = self._s3_client(region).get_paginator("list_objects_v2")
         requester_pays = {"RequestPayer": "requester"} if self.requester_pays else {}
-        page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix, **requester_pays)
+        if max_items is None:
+            page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix, **requester_pays)
+        else:
+            page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix, PaginationConfig={'MaxItems': max_items}, **requester_pays)
         for page in page_iterator:
             objs = []
             for obj in page.get("Contents", []):

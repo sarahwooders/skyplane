@@ -99,6 +99,7 @@ class MulticastDirectPlanner(Planner):
     def plan(self, jobs: List[TransferJob]) -> TopologyPlan:
         src_region_tag = jobs[0].src_iface.region_tag()
         dst_region_tags = [iface.region_tag() for iface in jobs[0].dst_ifaces]
+        print("planner dst region", dst_region_tags, jobs[0].dst_ifaces)
         # jobs must have same sources and destinations
         for job in jobs[1:]:
             assert job.src_iface.region_tag() == src_region_tag, "All jobs must have same source region"
@@ -123,7 +124,9 @@ class MulticastDirectPlanner(Planner):
             src_provider = src_region_tag.split(":")[0]
 
             # give each job a different partition id, so we can read/write to different buckets
-            partition_id = jobs.index(job)
+            # use job UUID as partition id
+            partition_id = str(job.uuid) #jobs.index(job)
+            print(job, "partition", partition_id)
 
             # source region gateway program
             obj_store_read = src_program.add_operator(

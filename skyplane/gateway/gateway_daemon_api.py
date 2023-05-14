@@ -222,21 +222,14 @@ class GatewayDaemonAPI(threading.Thread):
             if isinstance(body, dict):
                 chunk_req = ChunkRequest.from_dict(body)
                 self.chunk_requests[chunk_req.chunk.chunk_id] = chunk_req
-                qsize, succ = self.chunk_store.add_chunk_request(chunk_req, state)
-                if not succ:
-                    return 0, qsize, False
-                return 1, qsize, True
-            else:
-                assert isinstance(body, list), f"Body must be list, got {type(body)}"
-                added = 0
+                qsize = self.chunk_store.add_chunk_request(chunk_req, state)
+                return 1, qsize
+            elif isinstance(body, list):
                 for row in body:
                     chunk_req = ChunkRequest.from_dict(row)
                     self.chunk_requests[chunk_req.chunk.chunk_id] = chunk_req
-                    qsize, succ = self.chunk_store.add_chunk_request(chunk_req, state)
-                    if not succ:
-                        return added, qsize, False
-                    added += 1
-                return added, qsize, True
+                    qsize = self.chunk_store.add_chunk_request(chunk_req, state)
+                return len(body), qsize
 
         @app.route("/api/v1/chunk_requests", methods=["GET"])
         def get_chunk_requests():
@@ -268,10 +261,9 @@ class GatewayDaemonAPI(threading.Thread):
         def add_chunk_request():
             print(f"[gateway_api] Recieved chunk request {request.json}")
             state_param = request.args.get("state", "registered")
-            n_added, qsize, succ = add_chunk_req(request.json, ChunkState.from_str(state_param))
+            n_added, qsize = add_chunk_req(request.json, ChunkState.from_str(state_param))
             # TODO: Add to chunk manager queue
-            print(f"[gateway_api] Added {n_added} chunk requests to queue, size {qsize} success {succ}")
-            return jsonify({"status": succ, "n_added": n_added, "qsize": qsize})
+            return jsonify({"status": "ok", "n_added": n_added, "qsize": qsize})
 
         # update chunk request
         @app.route("/api/v1/chunk_requests/<chunk_id>", methods=["PUT"])

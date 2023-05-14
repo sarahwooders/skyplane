@@ -32,6 +32,7 @@ class TopologyPlanGateway:
     @property
     def region(self):
         """Get the region of the gateway"""
+        print(self.region_tag)
         return self.region_tag.split(":")[1]
 
     def set_private_ip_address(self, private_ip_address: str):

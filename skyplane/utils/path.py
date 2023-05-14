@@ -56,6 +56,9 @@ def parse_path(path: str) -> Tuple[str, Optional[str], Optional[str]]:
             raise ValueError(f"Invalid HDFS path: {path}")
         host, path = match.groups()
         return "hdfs", host, path
+    elif path.startswith("test://"):
+        # used for testing 
+        return "test", path, path
     else:
         if not is_plausible_local_path(path):
             logger.warning(f"Local path '{path}' does not exist")

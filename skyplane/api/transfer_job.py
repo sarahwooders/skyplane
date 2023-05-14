@@ -1,4 +1,5 @@
 import json
+import string
 import time
 import time
 import typer
@@ -21,6 +22,8 @@ from abc import ABC, abstractmethod
 import urllib3
 from rich import print as rprint
 from functools import partial
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 from skyplane import exceptions
 from skyplane.api.config import TransferConfig
@@ -67,8 +70,8 @@ class Chunker:
         src_iface: StorageInterface,
         dst_ifaces: List[StorageInterface],
         transfer_config: TransferConfig,
+        partition_id: str, 
         concurrent_multipart_chunk_threads: Optional[int] = 64,
-        num_partitions: Optional[int] = 1,
     ):
         """
         :param src_iface: source object store interface
@@ -85,7 +88,7 @@ class Chunker:
         self.transfer_config = transfer_config
         self.multipart_upload_requests = []
         self.concurrent_multipart_chunk_threads = concurrent_multipart_chunk_threads
-        self.num_partitions = num_partitions
+        self.partition_id = partition_id
 
     def _run_multipart_chunk_thread(
         self,
@@ -110,7 +113,7 @@ class Chunker:
                 for dest_iface in self.dst_ifaces:
                     dest_object = dest_objects[dest_iface.region_tag()]
                     upload_id = dest_iface.initiate_multipart_upload(dest_object.key, mime_type=mime_type)
-                    # print(f"Created upload id for key {dest_object.key} with upload id {upload_id} for bucket {dest_iface.bucket_name}")
+                    #print(f"Created upload id for key {dest_object.key} with upload id {upload_id} for bucket {dest_iface.bucket_name}")
                     # store mapping between key and upload id for each region
                     upload_id_mapping[dest_iface.region_tag()] = (src_object.key, upload_id)
                 out_queue_chunks.put(GatewayMessage(upload_id_mapping=upload_id_mapping))  # send to output queue
@@ -136,7 +139,7 @@ class Chunker:
                         dest_key=dest_key,  # dest_object.key, # TODO: upload basename (no prefix)
                         chunk_id=uuid.uuid4().hex,
                         file_offset_bytes=offset,
-                        partition_id=str(part_num % self.num_partitions),
+                        partition_id=self.partition_id,
                         chunk_length_bytes=file_size_bytes,
                         part_number=part_num,
                         # upload_id=upload_id,
@@ -232,6 +235,79 @@ class Chunker:
                     src_path_after_prefix = src_path_after_prefix[1:] if src_path_after_prefix.startswith("/") else src_path_after_prefix
                     return join(dest_prefix, src_path_after_prefix)
 
+
+    def list_objects_parallel(self, src_prefix): 
+
+        # can we use regex that enumerate. If we do alphanumeric the search space blows up quickly
+        # another approach is preioritize the pattern we have seem before using some sort of episilon greedy style exploration
+        #alphanumeric = string.digits
+        alphanumeric = string.digits + string.ascii_lowercase
+        search_prefix = src_prefix if src_prefix.endswith("/") else src_prefix + "/"
+
+        thread_pool = ThreadPoolExecutor(max_workers=100)
+
+        to_search_tasks = [search_prefix + char for char in alphanumeric]
+        print(to_search_tasks)
+
+        search_round = 10  # we will search [0-9]{search_length} for hits
+        stop_at_num_found = 400  # stop searching when we found this many prefixes
+
+        found_prefix = []
+        for _ in range(search_round):
+            found_prefix.clear()
+
+            # submit all the tasks
+            print(f"Searching {len(to_search_tasks)} prefixes")
+
+            # probe 
+            tasks = [thread_pool.submit(self.src_iface.list_objects, prefix, 1) for prefix in to_search_tasks]
+            prefix_task_map = {task: prefix for prefix, task in zip(to_search_tasks, tasks)}
+
+            # iterate over the task as they complete
+            for future in as_completed(tasks):
+                assert future.done()
+                if future.exception():
+                    print(f"Exception {future.exception()}")
+                    raise future.exception()
+                elif future.result() and len(list(future.result())) > 0:
+                    found_prefix.append(prefix_task_map[future])
+            print(f"Found {len(found_prefix)} prefixes")
+            if len(found_prefix) > stop_at_num_found:
+                break
+            
+            # update the search space
+            to_search_tasks = [prefix + char for prefix in found_prefix for char in alphanumeric]
+
+        # run list tasks in parallel 
+        obj_queue = Queue()
+        def list_objects(prefix):
+            for obj in self.src_iface.list_objects(prefix):
+                obj_queue.put(obj)
+
+        #tasks = [thread_pool.submit(self.src_iface.list_objects, prefix) for prefix in found_prefix]
+        tasks = [thread_pool.submit(list_objects, prefix) for prefix in found_prefix]
+        print("tasks", tasks)
+
+        while not (obj_queue.empty() and all(task.done() for task in tasks)):
+            try:
+                obj = obj_queue.get()
+                yield obj
+            except Exception as e:
+                print(e)
+                raise e
+
+        ## yield objects as query is completed
+        #for future in as_completed(tasks):
+        #    assert future.done()
+        #    if future.exception():
+        #        print(f"Exception {future.exception()}")
+        #        raise future.exception()
+        #    else:
+        #        for obj in future.result():
+        #            print("yield", obj.key)
+        #            yield obj
+
+
     def transfer_pair_generator(
         self,
         src_prefix: str,
@@ -265,6 +341,7 @@ class Chunker:
         logger.fs.debug(f"Querying objects in {self.src_iface.path()}")
         n_objs = 0
         for obj in self.src_iface.list_objects(src_prefix):
+        #for obj in self.list_objects_parallel(src_prefix):
             if prefilter_fn is None or prefilter_fn(obj):
                 # collect list of destination objects
                 dest_objs = {}
@@ -300,7 +377,7 @@ class Chunker:
 
         if n_objs == 0:
             logger.error("Specified object does not exist.\n")
-            raise exceptions.MissingObjectException(f"No objects were found in the specified prefix")
+            raise exceptions.MissingObjectException(f"No objects were found in the specified prefix {src_prefix}")
 
     def chunk(self, transfer_pair_generator: Generator[TransferPair, None, None]) -> Generator[GatewayMessage, None, None]:
         """Break transfer list into chunks.
@@ -336,7 +413,7 @@ class Chunker:
                         dest_key=transfer_pair.dst_key,  # TODO: get rid of dest_key, and have write object have info on prefix  (or have a map here)
                         chunk_id=uuid.uuid4().hex,
                         chunk_length_bytes=transfer_pair.src_obj.size,
-                        partition_id=str(0),  # TODO: fix this to distribute across multiple partitions
+                        partition_id=self.partition_id,
                     )
                 )
 
@@ -360,6 +437,7 @@ class Chunker:
 
             # drain multipart chunk queue and yield with updated chunk IDs
             while not multipart_chunk_queue.empty():
+                print("yield multipart", multipart_chunk_queue.qsize())
                 yield multipart_chunk_queue.get()
 
     @staticmethod
@@ -445,13 +523,13 @@ class TransferJob(ABC):
         dst_paths: List[str] or str,
         recursive: bool = False,
         requester_pays: bool = False,
-        uuid: str = field(init=False, default_factory=lambda: str(uuid.uuid4())),
+        custom_uuid: Optional[str] = None,
     ):
         self.src_path = src_path
         self.dst_paths = dst_paths
         self.recursive = recursive
         self.requester_pays = requester_pays
-        self.uuid = uuid
+        self.uuid = str(uuid.uuid4()) if custom_uuid is None else uuid
 
     @property
     def transfer_type(self) -> str:
@@ -490,7 +568,7 @@ class TransferJob(ABC):
     @property
     def dst_ifaces(self) -> List[StorageInterface]:
         """Return the destination object store interface"""
-        if not hasattr(self, "_dst_iface"):
+        if not hasattr(self, "_dst_ifaces"):
             if self.transfer_type == "unicast":
                 provider_dst, bucket_dst, _ = parse_path(self.dst_paths[0])
                 self._dst_ifaces = [StorageInterface.create(f"{provider_dst}:infer", bucket_dst)]
@@ -544,9 +622,9 @@ class CopyJob(TransferJob):
         dst_paths: List[str] or str,
         recursive: bool = False,
         requester_pays: bool = False,
-        uuid: str = field(init=False, default_factory=lambda: str(uuid.uuid4())),
+        custom_uuid: Optional[str] = None,
     ):
-        super().__init__(src_path, dst_paths, recursive, requester_pays, uuid)
+        super().__init__(src_path, dst_paths, recursive, requester_pays, custom_uuid)
         self.transfer_list = []
         self.multipart_transfer_list = []
 
@@ -569,13 +647,13 @@ class CopyJob(TransferJob):
         :type chunker: Chunker
         """
         if chunker is None:  # used for external access to transfer pair list
-            chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config)  # TODO: should read in existing transfer config
+            chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)  # TODO: should read in existing transfer config
         yield from chunker.transfer_pair_generator(self.src_prefix, self.dst_prefixes, self.recursive, self._pre_filter_fn)
 
     def dispatch(
         self,
         dataplane: "Dataplane",
-        dispatch_batch_size: int = 100,  # 6.4 GB worth of chunks
+        dispatch_batch_size: int = 1000,  # 6.4 GB worth of chunks
         transfer_config: Optional[TransferConfig] = field(init=False, default_factory=lambda: TransferConfig()),
     ) -> Generator[Chunk, None, None]:
         """Dispatch transfer job to specified gateways.
@@ -587,7 +665,7 @@ class CopyJob(TransferJob):
         :param dispatch_batch_size: maximum size of the buffer to temporarily store the generators (default: 1000)
         :type dispatch_batch_size: int
         """
-        chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config)
+        chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)
         transfer_pair_generator = self.gen_transfer_pairs(chunker)  # returns TransferPair objects
         gen_transfer_list = chunker.tail_generator(transfer_pair_generator, self.transfer_list)
         chunks = chunker.chunk(gen_transfer_list)
@@ -648,12 +726,12 @@ class CopyJob(TransferJob):
                     headers={"Content-Type": "application/json"},
                 )
                 reply_json = json.loads(reply.data.decode("utf-8"))
-                print(server, min_idx, "added", n_added, len(chunk_batch), reply_json)
                 n_added += reply_json["n_added"]
+                print(self.uuid, server, min_idx, "added", n_added, len(chunk_batch), reply_json)
                 queue_size[min_idx] = reply_json["qsize"]  # update queue size
                 if reply.status != 200:
                     raise Exception(f"Failed to dispatch chunk requests {server.instance_name()}: {reply.data.decode('utf-8')}")
-
+                    
                 # dont try again with some gateway
                 min_idx = (min_idx + 1) % len(src_gateways)
 
@@ -737,9 +815,9 @@ class SyncJob(CopyJob):
         src_path: str,
         dst_paths: List[str] or str,
         requester_pays: bool = False,
-        uuid: str = field(init=False, default_factory=lambda: str(uuid.uuid4())),
+        custom_uuid: Optional[str] = None,
     ):
-        super().__init__(src_path, dst_paths, True, requester_pays, uuid)
+        super().__init__(src_path, dst_paths, True, requester_pays, custom_uuid)
         self.transfer_list = []
         self.multipart_transfer_list = []
 
@@ -759,7 +837,7 @@ class SyncJob(CopyJob):
         :type chunker: Chunker
         """
         if chunker is None:  # used for external access to transfer pair list
-            chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config)
+            chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)
         transfer_pair_gen = chunker.transfer_pair_generator(self.src_prefix, self.dst_prefixes, self.recursive, self._pre_filter_fn)
 
         # only single destination supported

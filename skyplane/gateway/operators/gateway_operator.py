@@ -459,10 +459,15 @@ class GatewayObjStoreOperator(GatewayOperator):
         key = f"{region}:{bucket}"
         if key not in self.obj_store_interfaces:
             logger.warning(f"[gateway_daemon] ObjectStoreInterface not cached for {key}")
-            try:
-                self.obj_store_interfaces[key] = ObjectStoreInterface.create(region, bucket)
-            except Exception as e:
-                raise ValueError(f"Failed to create obj store interface {str(e)}")
+            while True:
+                try:
+                    self.obj_store_interfaces[key] = ObjectStoreInterface.create(region, bucket)
+                except Exception as e:
+                    if "RATE_LIMIT_EXCEEDED" in str(e):
+                        logger.warning(f"[gateway_daemon] Rate limit exceeded, waiting before retrying {key}")
+                        time.sleep(1)
+                        continue
+                    raise ValueError(f"Failed to create obj store interface {str(e)}")
         return self.obj_store_interfaces[key]
 
 

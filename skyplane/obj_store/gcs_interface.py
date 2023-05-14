@@ -170,7 +170,14 @@ class GCSInterface(ObjectStoreInterface):
             req = requests.Request(method, url, headers=headers)
 
         prepared = req.prepare()
-        response = self._requests_session.send(prepared)
+
+        try:
+            response = self._requests_session.send(prepared)
+        except Exception as e: 
+            response_data = response.data.read()
+            print("RESPONSE", response_data)
+            raise ValueError(f"Invalid status code {response.status_code}: {response.text}")
+
 
         if not response.ok:
             raise ValueError(f"Invalid status code {response.status_code}: {response.text}")

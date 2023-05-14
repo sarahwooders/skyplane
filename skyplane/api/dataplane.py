@@ -243,6 +243,7 @@ class Dataplane:
         :param spinner: Whether to show the spinner during the job (default: False)
         :type spinner: bool
         """
+        print("DATEPLANE DEPROVISION")
         with self.provisioning_lock:
             if self.debug and self.provisioned:
                 logger.fs.info(f"Copying gateway logs to {self.transfer_dir}")
@@ -265,18 +266,24 @@ class Dataplane:
                 )
                 self.provisioned = False
 
-    def check_error_logs(self) -> Dict[str, List[str]]:
+    def check_error_logs(self, region_tag: Optional[str] = None) -> Dict[str, List[str]]:
         """Get the error log from remote gateways if there is any error."""
 
         def get_error_logs(args):
             _, instance = args
+            print("CHECKING ERRORS", f"{instance.gateway_api_url}/api/v1/errors")
             reply = self.http_pool.request("GET", f"{instance.gateway_api_url}/api/v1/errors")
             if reply.status != 200:
                 raise Exception(f"Failed to get error logs from gateway instance {instance.instance_name()}: {reply.data.decode('utf-8')}")
             return json.loads(reply.data.decode("utf-8"))["errors"]
 
         errors: Dict[str, List[str]] = {}
-        for (_, instance), result in do_parallel(get_error_logs, self.bound_nodes.items(), n=8):
+        if region_tag is not None:
+            nodes = {k: v for k,v in self.bound_nodes.items() if k.region_tag == region_tag}
+        else:
+            nodes = self.bound_nodes
+
+        for (_, instance), result in do_parallel(get_error_logs, nodes.items(), n=8):
             errors[instance] = result
         return errors
 

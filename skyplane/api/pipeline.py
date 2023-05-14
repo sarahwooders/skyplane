@@ -90,13 +90,13 @@ class Pipeline:
         dp = Dataplane(self.clientid, topo, self.provisioner, self.transfer_config, str(self.transfer_dir), debug=debug)
         return dp
 
-    def start(self, debug=False, progress=False):
+    def start(self, progress=False):
         ## create plan from set of jobs scheduled
         # topo = self.planner.plan(self.jobs_to_dispatch)
 
         ## create dataplane from plan
         # dp = Dataplane(self.clientid, topo, self.provisioner, self.transfer_config, self.transfer_dir, debug=debug)
-        dp = self.create_dataplane(debug)
+        dp = self.create_dataplane(self.debug)
         try:
             dp.provision(spinner=True)
             if progress:
@@ -110,10 +110,11 @@ class Pipeline:
             tracker.join()
 
             # copy gateway logs
-            if debug:
+            if self.debug:
                 dp.copy_gateway_logs()
         except Exception as e:
-            dp.copy_gateway_logs()
+            logger.fs.error(f"Error during transfer: {e}, copy logs")
+        print("PIPELINE DEPROVISIONING")
         dp.deprovision(spinner=True)
         return dp
 
