@@ -245,14 +245,14 @@ class Dataplane:
         """
         print("DATEPLANE DEPROVISION")
         with self.provisioning_lock:
-            if self.debug and self.provisioned:
-                logger.fs.info(f"Copying gateway logs to {self.transfer_dir}")
-                self.copy_gateway_logs()
-
             if not self.provisioned:
                 logger.fs.warning("Attempting to deprovision dataplane that is not provisioned, this may be from auto_deprovision.")
             # wait for tracker tasks
             try:
+                if self.debug and self.provisioned:
+                    logger.fs.info(f"Copying gateway logs to {self.transfer_dir}")
+                    self.copy_gateway_logs()
+
                 for task in self.pending_transfers:
                     logger.fs.warning(f"Before deprovisioning, waiting for jobs to finish: {list(task.jobs.keys())}")
                     task.join()
@@ -271,7 +271,7 @@ class Dataplane:
 
         def get_error_logs(args):
             _, instance = args
-            print("CHECKING ERRORS", f"{instance.gateway_api_url}/api/v1/errors")
+            #print("CHECKING ERRORS", f"{instance.gateway_api_url}/api/v1/errors")
             reply = self.http_pool.request("GET", f"{instance.gateway_api_url}/api/v1/errors")
             if reply.status != 200:
                 raise Exception(f"Failed to get error logs from gateway instance {instance.instance_name()}: {reply.data.decode('utf-8')}")

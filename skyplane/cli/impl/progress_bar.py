@@ -39,6 +39,7 @@ class ProgressBarTransferHook(TransferHook):
         else:
             self.bytes_dispatched += sum([chunk.chunk_length_bytes for chunk in chunks])
             self.chunks_dispatched += len(chunks)
+        print("DISPATCHED", sum([chunk.chunk_length_bytes for chunk in chunks]), chunks)
         # rerender spinners with updated text "Dispatching chunks (~{format_bytes(self.bytes_dispatched)} dispatched)"
         self.spinner.update(
             self.dispatch_task, description=f" {self.chunks_dispatched} chunks (~{format_bytes(self.bytes_dispatched)} dispatched)"
@@ -63,7 +64,6 @@ class ProgressBarTransferHook(TransferHook):
         assert region_tag is not None, f"Must specify region tag for progress bar"
         self.chunks_completed[region_tag] += len(chunks)
         self.bytes_completed[region_tag] += sum([chunk.chunk_length_bytes for chunk in chunks])
-        print("completed", self.chunks_completed[region_tag], self.bytes_completed[region_tag])
         self.pbar.update(self.transfer_task[region_tag], completed=self.bytes_completed[region_tag])
 
     def on_transfer_end(self):

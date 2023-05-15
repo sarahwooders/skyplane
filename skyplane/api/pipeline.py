@@ -17,7 +17,7 @@ from skyplane.api.tracker import TransferProgressTracker, TransferHook
 from skyplane.api.transfer_job import CopyJob, SyncJob, TransferJob
 from skyplane.api.config import TransferConfig
 
-from skyplane.planner.planner import MulticastDirectPlanner
+from skyplane.planner.planner import MulticastDirectPlanner, DirectPlannerOneSided
 from skyplane.planner.topology import TopologyPlanGateway
 from skyplane.utils import logger
 from skyplane.utils.definitions import gateway_docker_image, tmp_log_dir
@@ -68,7 +68,8 @@ class Pipeline:
         # planner
         self.planning_algorithm = planning_algorithm
         if self.planning_algorithm == "direct":
-            self.planner = MulticastDirectPlanner(self.max_instances, 64)
+            #self.planner = MulticastDirectPlanner(self.max_instances, 64)
+            self.planner = DirectPlannerOneSided(self.max_instances, 64)
         else:
             raise ValueError(f"No such planning algorithm {planning_algorithm}")
 
@@ -97,26 +98,25 @@ class Pipeline:
         ## create dataplane from plan
         # dp = Dataplane(self.clientid, topo, self.provisioner, self.transfer_config, self.transfer_dir, debug=debug)
         dp = self.create_dataplane(self.debug)
-        try:
-            dp.provision(spinner=True)
-            if progress:
-                from skyplane.cli.impl.progress_bar import ProgressBarTransferHook
+        with dp.auto_deprovision():
+            try:
+                dp.provision(spinner=True)
+                if progress:
+                    from skyplane.cli.impl.progress_bar import ProgressBarTransferHook
 
-                tracker = dp.run_async(self.jobs_to_dispatch, hooks=ProgressBarTransferHook(dp.topology.dest_region_tags))
-            else:
-                tracker = dp.run_async(self.jobs_to_dispatch)
+                    tracker = dp.run_async(self.jobs_to_dispatch, hooks=ProgressBarTransferHook(dp.topology.dest_region_tags))
+                else:
+                    tracker = dp.run_async(self.jobs_to_dispatch)
 
-            # wait for job to finish
-            tracker.join()
+                # wait for job to finish
+                tracker.join()
 
-            # copy gateway logs
-            if self.debug:
+                # copy gateway logs
+                if self.debug:
+                    dp.copy_gateway_logs()
+            except Exception as e: 
                 dp.copy_gateway_logs()
-        except Exception as e:
-            logger.fs.error(f"Error during transfer: {e}, copy logs")
-        print("PIPELINE DEPROVISIONING")
-        dp.deprovision(spinner=True)
-        return dp
+                raise e  
 
     def queue_copy(
         self,

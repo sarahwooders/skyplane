@@ -686,6 +686,7 @@ class CopyJob(TransferJob):
         """
         # dispatch chunk requests
         src_gateways = dataplane.source_gateways()
+        print("source gateways", src_gateways)
         queue_size = [0] * len(src_gateways)
         n_multiparts = 0
         start = time.time()
@@ -730,6 +731,7 @@ class CopyJob(TransferJob):
                 server = src_gateways[min_idx]
                 assert Chunk.from_dict(chunk_batch[0].as_dict()) == chunk_batch[0], f"Invalid chunk request: {chunk_batch[0].as_dict}"
 
+                print("Sending chunk to", server.gateway_api_url)
                 # TODO: make async
                 reply = self.http_pool.request(
                     "POST",
