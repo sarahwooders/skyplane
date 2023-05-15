@@ -170,13 +170,6 @@ class TransferProgressTracker(Thread):
                 "total_runtime_s": round(runtime_s, 4),
             }
 
-        # monitor transfer
-        dest_regions = self.dataplane.topology.dest_region_tags
-        monitor_results = []
-        executor = ThreadPoolExecutor(max_workers=len(dest_regions))
-        monitor_futures = [executor.submit(monitor_single_dst_helper, dest) for dest in dest_regions]
-
-
         # dispatch chunks 
         try:
             # pre-dispatch chunks to begin pre-buffering chunks
@@ -192,6 +185,7 @@ class TransferProgressTracker(Thread):
                 for chunk in chunk_streams[job_uuid]:
                     chunks_dispatched = [chunk]
                     self.job_chunk_requests[job_uuid][chunk.chunk_id] = chunk
+                    print("dispatched chunk", chunk)
                     self.hooks.on_chunk_dispatched(chunks_dispatched)
                     for region in self.dataplane.topology.dest_region_tags:
                         self.job_pending_chunk_ids[job_uuid][region].add(chunk.chunk_id)
@@ -200,6 +194,7 @@ class TransferProgressTracker(Thread):
                 )
                 print("DONE DISPATCH", job_uuid)
         except Exception as e:
+            self.hooks.on_transfer_error(e) # end dispatch progress bar
             UsageClient.log_exception(
                 "dispatch job",
                 e,
@@ -209,10 +204,15 @@ class TransferProgressTracker(Thread):
                 session_start_timestamp_ms,
             )
             raise e
-        
         print("DISPATCH COMPLETE")
         self.dispatch_complete = True
         self.hooks.on_dispatch_end()
+
+        # monitor transfer
+        dest_regions = self.dataplane.topology.dest_region_tags
+        monitor_results = []
+        executor = ThreadPoolExecutor(max_workers=len(dest_regions))
+        monitor_futures = [executor.submit(monitor_single_dst_helper, dest) for dest in dest_regions]
 
         # wait for completion      
         for future in as_completed(monitor_futures):
@@ -295,7 +295,7 @@ class TransferProgressTracker(Thread):
 
             log_df = pd.DataFrame(self._query_chunk_status())
             if log_df.empty:
-                logger.warning("No chunk status log entries yet")
+                logger.warning(f"No chunk status log entries yet in {region_tag}")
                 time.sleep(1)
                 continue
 

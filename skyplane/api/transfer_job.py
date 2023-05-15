@@ -113,7 +113,7 @@ class Chunker:
                 for dest_iface in self.dst_ifaces:
                     dest_object = dest_objects[dest_iface.region_tag()]
                     upload_id = dest_iface.initiate_multipart_upload(dest_object.key, mime_type=mime_type)
-                    #print(f"Created upload id for key {dest_object.key} with upload id {upload_id} for bucket {dest_iface.bucket_name}")
+                    print(f"Created upload id for key {dest_object.key} with upload id {upload_id} for bucket {dest_iface.bucket_name}")
                     # store mapping between key and upload id for each region
                     upload_id_mapping[dest_iface.region_tag()] = (src_object.key, upload_id)
                 out_queue_chunks.put(GatewayMessage(upload_id_mapping=upload_id_mapping))  # send to output queue
@@ -373,7 +373,9 @@ class Chunker:
                 # assert that all destinations share the same post-fix key
                 assert len(list(set(dest_keys))) == 1, f"Destination keys {dest_keys} do not match"
                 n_objs += 1
+                print("yield", obj.key)
                 yield TransferPair(src_obj=obj, dst_objs=dest_objs, dst_key=dest_keys[0])
+        print("DONE yielding", src_prefix)
 
         if n_objs == 0:
             logger.error("Specified object does not exist.\n")
@@ -431,6 +433,7 @@ class Chunker:
                 logger.fs.debug(f"Remaining in multipart queue: sent {multipart_send_queue.qsize()}")
                 time.sleep(0.1)
             # send sentinel to all threads
+            print("setting exit event thread")
             multipart_exit_event.set()
             for thread in multipart_chunk_threads:
                 thread.join()
@@ -439,6 +442,7 @@ class Chunker:
             while not multipart_chunk_queue.empty():
                 print("yield multipart", multipart_chunk_queue.qsize())
                 yield multipart_chunk_queue.get()
+            print("done waiting for multipart threads to finish")
 
     @staticmethod
     def batch_generator(gen_in: Generator[T, None, None], batch_size: int) -> Generator[List[T], None, None]:
@@ -650,6 +654,21 @@ class CopyJob(TransferJob):
             chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)  # TODO: should read in existing transfer config
         yield from chunker.transfer_pair_generator(self.src_prefix, self.dst_prefixes, self.recursive, self._pre_filter_fn)
 
+    def generate_chunk_batches(self, chunker: Chunker, dispatch_batch_size: int, transfer_config: TransferConfig) -> Generator[Chunk, None, None]:
+        """Generate chunks for the transfer job.
+
+        :param transfer_config: the configuration during the transfer
+        :type transfer_config: TransferConfig
+        """
+        transfer_pair_generator = self.gen_transfer_pairs(chunker)  # returns TransferPair objects
+        gen_transfer_list = chunker.tail_generator(transfer_pair_generator, self.transfer_list)
+        chunks = chunker.chunk(gen_transfer_list)
+        batches = chunker.batch_generator(
+            chunker.prefetch_generator(chunks, buffer_size=dispatch_batch_size * 32), batch_size=dispatch_batch_size
+        )
+        yield from batches
+
+
     def dispatch(
         self,
         dataplane: "Dataplane",
@@ -665,21 +684,14 @@ class CopyJob(TransferJob):
         :param dispatch_batch_size: maximum size of the buffer to temporarily store the generators (default: 1000)
         :type dispatch_batch_size: int
         """
-        chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)
-        transfer_pair_generator = self.gen_transfer_pairs(chunker)  # returns TransferPair objects
-        gen_transfer_list = chunker.tail_generator(transfer_pair_generator, self.transfer_list)
-        chunks = chunker.chunk(gen_transfer_list)
-        batches = chunker.batch_generator(
-            chunker.prefetch_generator(chunks, buffer_size=dispatch_batch_size * 32), batch_size=dispatch_batch_size
-        )
-
         # dispatch chunk requests
         src_gateways = dataplane.source_gateways()
         queue_size = [0] * len(src_gateways)
         n_multiparts = 0
         start = time.time()
 
-        for batch in batches:
+        chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)
+        for batch in self.generate_chunk_batches(chunker, dispatch_batch_size, transfer_config):
             # send upload_id mappings to sink gateways
             upload_id_batch = [cr for cr in batch if cr.upload_id_mapping is not None]
             region_dst_gateways = dataplane.sink_gateways()
@@ -836,6 +848,7 @@ class SyncJob(CopyJob):
         :param chunker: chunker that makes the chunk requests
         :type chunker: Chunker
         """
+        print("gen transfer")
         if chunker is None:  # used for external access to transfer pair list
             chunker = Chunker(self.src_iface, self.dst_ifaces, transfer_config, partition_id=self.uuid)
         transfer_pair_gen = chunker.transfer_pair_generator(self.src_prefix, self.dst_prefixes, self.recursive, self._pre_filter_fn)
@@ -846,6 +859,7 @@ class SyncJob(CopyJob):
         # enrich destination objects with metadata
         for src_obj, dest_obj in self._enrich_dest_objs(transfer_pair_gen, self.dst_prefixes):
             if self._post_filter_fn(src_obj, dest_obj):
+                print("use pair", src_obj.key)
                 yield TransferPair(
                     src_obj=src_obj,
                     dst_objs={self.dst_ifaces[0].region_tag(): dest_obj},
@@ -867,6 +881,7 @@ class SyncJob(CopyJob):
             dest_prefix = dest_prefixes[i]
             logger.fs.debug(f"Querying objects in {dst_iface.bucket()}")
             if not hasattr(self, "_found_dest_objs"):
+                print("listing dest objects", dest_prefix)
                 self._found_dest_objs = {obj.key: obj for obj in dst_iface.list_objects(dest_prefix)}
             for pair in transfer_pairs:
                 src_obj = pair.src_obj

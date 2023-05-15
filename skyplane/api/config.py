@@ -60,7 +60,7 @@ class IBMCloudConfig(AuthenticationConfig):
 
 @dataclass(frozen=True)
 class TransferConfig:
-    autoterminate_minutes: int = 15
+    autoterminate_minutes: int = 300
     requester_pays: bool = False
 
     # randomly generate data

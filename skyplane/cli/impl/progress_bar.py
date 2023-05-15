@@ -63,11 +63,14 @@ class ProgressBarTransferHook(TransferHook):
         assert region_tag is not None, f"Must specify region tag for progress bar"
         self.chunks_completed[region_tag] += len(chunks)
         self.bytes_completed[region_tag] += sum([chunk.chunk_length_bytes for chunk in chunks])
+        print("completed", self.chunks_completed[region_tag], self.bytes_completed[region_tag])
         self.pbar.update(self.transfer_task[region_tag], completed=self.bytes_completed[region_tag])
 
     def on_transfer_end(self):
         self.pbar.stop()
 
     def on_transfer_error(self, error):
+        if self.spinner: self.spinner.stop() # stop spinner
+        if self.pbar: self.pbar.stop() # stop progress bar
         console.log(error)
         raise exceptions.SkyplaneGatewayException("Transfer failed with error", error)

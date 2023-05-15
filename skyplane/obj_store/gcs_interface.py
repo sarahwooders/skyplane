@@ -149,7 +149,7 @@ class GCSInterface(ObjectStoreInterface):
         params: dict,
         method: str,
         headers: Optional[dict] = None,
-        expiration=datetime.timedelta(minutes=15),
+        expiration=datetime.timedelta(minutes=300),
         data=None,
         content_type="application/octet-stream",
     ):

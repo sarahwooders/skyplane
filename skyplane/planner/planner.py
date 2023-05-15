@@ -126,7 +126,7 @@ class MulticastDirectPlanner(Planner):
             # give each job a different partition id, so we can read/write to different buckets
             # use job UUID as partition id
             partition_id = str(job.uuid) #jobs.index(job)
-            print(job, "partition", partition_id)
+            print(job, job.src_path, "partition", partition_id)
 
             # source region gateway program
             obj_store_read = src_program.add_operator(
