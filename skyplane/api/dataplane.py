@@ -64,6 +64,8 @@ class Dataplane:
         self.topology = topology
         self.provisioner = provisioner
         self.transfer_config = transfer_config
+        # disable for azure
+        # TODO: remove this
         self.http_pool = urllib3.PoolManager(retries=urllib3.Retry(total=3))
         self.provisioning_lock = threading.Lock()
         self.provisioned = False
@@ -117,7 +119,7 @@ class Dataplane:
             gateway_docker_image=gateway_docker_image,
             gateway_program_path=str(gateway_program_filename),
             gateway_info_path=f"{gateway_log_dir}/gateway_info.json",
-            e2ee_key_bytes=None,  # TODO: remove
+            e2ee_key_bytes=e2ee_key_bytes,  # TODO: remove
             use_bbr=self.transfer_config.use_bbr,  # TODO: remove
             use_compression=self.transfer_config.use_compression,
             use_socket_tls=self.transfer_config.use_socket_tls,
@@ -158,10 +160,13 @@ class Dataplane:
             # create VMs from the topology
             for node in self.topology.get_gateways():
                 cloud_provider, region = node.region_tag.split(":")
+                assert (
+                    cloud_provider != "cloudflare"
+                ), f"Cannot create VMs in certain cloud providers: check planner output {self.topology.to_dict()}"
                 self.provisioner.add_task(
                     cloud_provider=cloud_provider,
                     region=region,
-                    vm_type=getattr(self.transfer_config, f"{cloud_provider}_instance_class"),
+                    vm_type=node.vm_type or getattr(self.transfer_config, f"{cloud_provider}_instance_class"),
                     spot=getattr(self.transfer_config, f"{cloud_provider}_use_spot_instances"),
                     autoterminate_minutes=self.transfer_config.autoterminate_minutes,
                 )
@@ -288,10 +293,10 @@ class Dataplane:
         """Returns a list of source gateway nodes"""
         return [self.bound_nodes[n] for n in self.topology.source_instances()] if self.provisioned else []
 
-    def sink_gateways(self) -> Dict[str, List[compute.Server]]:
+    def sink_gateways(self, region_tag: Optional[str] = None) -> Dict[str, List[compute.Server]]:
         """Returns a list of sink gateway nodes"""
         return (
-            {region: [self.bound_nodes[n] for n in nodes] for region, nodes in self.topology.sink_instances().items()}
+            {region: [self.bound_nodes[n] for n in nodes] for region, nodes in self.topology.sink_instances(region_tag).items()}
             if self.provisioned
             else {}
         )

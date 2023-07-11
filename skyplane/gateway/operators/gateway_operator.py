@@ -6,6 +6,7 @@ import queue
 import socket
 import ssl
 import time
+import lz4.frame
 import traceback
 from functools import partial
 from multiprocessing import Event, Process, Queue
@@ -121,11 +122,11 @@ class GatewayOperator(ABC):
         pass
 
 
-class GatewayWaitReciever(GatewayOperator):
+class GatewayWaitReceiver(GatewayOperator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    # TODO: alternative (potentially better performnace) implementation: connect via queue with GatewayReciever to listen
+    # TODO: alternative (potentially better performnace) implementation: connect via queue with GatewayReceiver to listen
     # for download completition events - join with chunk request queue from ChunkStore
     def process(self, chunk_req: ChunkRequest):
         chunk_file_path = self.chunk_store.get_chunk_file_path(chunk_req.chunk.chunk_id)
@@ -134,7 +135,7 @@ class GatewayWaitReciever(GatewayOperator):
             return False
 
         # check to see if file is completed downloading
-        # Successfully recieved chunk 38400a29812142a486eaefcdebedf371, 161867776    0, 67108864
+        # Successfully received chunk 38400a29812142a486eaefcdebedf371, 161867776    0, 67108864
         with open(chunk_file_path, "rb") as f:
             data = f.read()
             if len(data) < chunk_req.chunk.chunk_length_bytes:
@@ -144,7 +145,7 @@ class GatewayWaitReciever(GatewayOperator):
                 len(data) == chunk_req.chunk.chunk_length_bytes
             ), f"Downloaded chunk length does not match expected length: {len(data)}, {chunk_req.chunk.chunk_length_bytes}"
         print(
-            f"[{self.handle}:{self.worker_id}] Successfully recieved chunk {chunk_req.chunk.chunk_id}, {len(data)}, {chunk_req.chunk.chunk_length_bytes}"
+            f"[{self.handle}:{self.worker_id}] Successfully received chunk {chunk_req.chunk.chunk_id}, {len(data)}, {chunk_req.chunk.chunk_length_bytes}"
         )
         return True
 
@@ -328,17 +329,24 @@ class GatewaySender(GatewayOperator):
             assert len(data) == chunk.chunk_length_bytes, f"chunk {chunk_id} has size {len(data)} but should be {chunk.chunk_length_bytes}"
 
             wire_length = len(data)
-            # compressed_length = None
-            # if self.use_compression and self.region == chunk_req.src_region:
-            #    data = lz4.frame.compress(data)
-            #    wire_length = len(data)
-            #    compressed_length = wire_length
-            # if self.e2ee_secretbox is not None and self.region == chunk_req.src_region:
-            #    data = self.e2ee_secretbox.encrypt(data)
-            #    wire_length = len(data)
+            raw_wire_length = wire_length
+            compressed_length = None
+
+            if self.use_compression:
+                data = lz4.frame.compress(data)
+                wire_length = len(data)
+                compressed_length = wire_length
+            if self.e2ee_secretbox is not None:
+                data = self.e2ee_secretbox.encrypt(data)
+                wire_length = len(data)
 
             # send chunk header
-            header = chunk.to_wire_header(n_chunks_left_on_socket=len(chunk_ids) - idx - 1, wire_length=wire_length, is_compressed=False)
+            header = chunk.to_wire_header(
+                n_chunks_left_on_socket=len(chunk_ids) - idx - 1,
+                wire_length=wire_length,
+                raw_wire_length=raw_wire_length,
+                is_compressed=(compressed_length is not None),
+            )
             # print(f"[sender-{self.worker_id}]:{chunk_id} sending chunk header {header}")
             header.to_socket(sock)
             # print(f"[sender-{self.worker_id}]:{chunk_id} sent chunk header")
@@ -425,14 +433,14 @@ class GatewayObjStoreOperator(GatewayOperator):
         self,
         handle: str,
         region: str,
+        bucket_name: str,
+        bucket_region: str,
         input_queue: GatewayQueue,
         output_queue: GatewayQueue,
         error_event,
         error_queue: Queue,
         n_processes: Optional[int] = 1,
         chunk_store: Optional[ChunkStore] = None,
-        bucket_name: Optional[str] = None,
-        bucket_region: Optional[str] = None,
     ):
         super().__init__(handle, region, input_queue, output_queue, error_event, error_queue, chunk_store, n_processes)
         self.bucket_name = bucket_name
@@ -460,17 +468,17 @@ class GatewayObjStoreReadOperator(GatewayObjStoreOperator):
         self,
         handle: str,
         region: str,
+        bucket_name: str,
+        bucket_region: str,
         input_queue: GatewayQueue,
         output_queue: GatewayQueue,
         error_event,
         error_queue: Queue,
         n_processes: int = 32,
         chunk_store: Optional[ChunkStore] = None,
-        bucket_name: Optional[str] = None,
-        bucket_region: Optional[str] = None,
     ):
         super().__init__(
-            handle, region, input_queue, output_queue, error_event, error_queue, n_processes, chunk_store, bucket_name, bucket_region
+            handle, region, bucket_name, bucket_region, input_queue, output_queue, error_event, error_queue, n_processes, chunk_store
         )
 
     def process(self, chunk_req: ChunkRequest, **args):
@@ -528,10 +536,10 @@ class GatewayObjStoreReadOperator(GatewayObjStoreOperator):
         # else:
         #    self.chunk_store.update_chunk_checksum(chunk_req.chunk.chunk_id, md5sum)
 
-        recieved_chunk_size = self.chunk_store.get_chunk_file_path(chunk_req.chunk.chunk_id).stat().st_size
+        received_chunk_size = self.chunk_store.get_chunk_file_path(chunk_req.chunk.chunk_id).stat().st_size
         assert (
-            recieved_chunk_size == chunk_req.chunk.chunk_length_bytes
-        ), f"Downloaded chunk {chunk_req.chunk.chunk_id} to {fpath} has incorrect size (expected {chunk_req.chunk.chunk_length_bytes} but got {recieved_chunk_size}, {chunk_req.chunk.chunk_length_bytes})"
+            received_chunk_size == chunk_req.chunk.chunk_length_bytes
+        ), f"Downloaded chunk {chunk_req.chunk.chunk_id} to {fpath} has incorrect size (expected {chunk_req.chunk.chunk_length_bytes} but got {received_chunk_size}, {chunk_req.chunk.chunk_length_bytes})"
         logger.debug(f"[obj_store:{self.worker_id}] Downloaded {chunk_req.chunk.chunk_id} from {self.bucket_name}")
         return True
 
@@ -541,6 +549,8 @@ class GatewayObjStoreWriteOperator(GatewayObjStoreOperator):
         self,
         handle: str,
         region: str,
+        bucket_name: str,
+        bucket_region: str,
         input_queue: GatewayQueue,
         output_queue: GatewayQueue,
         error_event,
@@ -548,12 +558,10 @@ class GatewayObjStoreWriteOperator(GatewayObjStoreOperator):
         upload_id_map: DictProxy,  # map of upload_id mappings from client
         n_processes: Optional[int] = 32,
         chunk_store: Optional[ChunkStore] = None,
-        bucket_name: Optional[str] = None,
-        bucket_region: Optional[str] = None,
         prefix: Optional[str] = "",
     ):
         super().__init__(
-            handle, region, input_queue, output_queue, error_event, error_queue, n_processes, chunk_store, bucket_name, bucket_region
+            handle, region, bucket_name, bucket_region, input_queue, output_queue, error_event, error_queue, n_processes, chunk_store
         )
         self.chunk_store = chunk_store
         self.upload_id_map = upload_id_map
@@ -569,8 +577,9 @@ class GatewayObjStoreWriteOperator(GatewayObjStoreOperator):
         obj_store_interface = self.get_obj_store_interface(self.bucket_region, self.bucket_name)
 
         if chunk_req.chunk.multi_part:
-            assert chunk_req.chunk.src_key in self.upload_id_map, f"Upload id for {chunk_req.chunk.src_key} not found {self.upload_id_map}"
-            upload_id = self.upload_id_map[chunk_req.chunk.src_key]
+            upload_id_key = self.bucket_region + chunk_req.chunk.src_key  # format for upload id key
+            assert upload_id_key in self.upload_id_map, f"Upload id for {upload_id_key} not found {self.upload_id_map}"
+            upload_id = self.upload_id_map[upload_id_key]
         else:
             upload_id = None
 
